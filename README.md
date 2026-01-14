@@ -63,8 +63,8 @@ Deletion script defaults to dry-run mode and requires explicit confirmation (typ
 # 1. Authenticate
 gcloud auth login
 
-# 2. Enable Asset Inventory API (required, one-time)
-gcloud services enable cloudasset.googleapis.com
+# 2. Enable Asset Inventory API (required, one-time, on any project)
+gcloud services enable cloudasset.googleapis.com --project=YOUR_PROJECT_ID
 
 # 3. Find obsolete projects
 python3 find_obsolete_projects.py
@@ -149,8 +149,8 @@ Full analysis report with projects categorized into three groups:
       "obsolete_reasons": ["No resources found"]
     }
   ],
-  "potentially_obsolete": [ /* projects with 90-180 days inactivity */ ],
-  "active": [ /* projects with recent activity */ ]
+  "potentially_obsolete": [],
+  "active": []
 }
 ```
 
@@ -182,7 +182,7 @@ Deletion-ready format consumed by `delete_projects.py`:
       "days_since_activity": 192,
       "obsolete_reasons": ["No activity for 192 days"],
       "deletion_status": "safe_to_delete",
-      "resource_counts": { /* ... */ }
+      "resource_counts": {}
     }
   ],
   "projects_to_review": [
@@ -195,7 +195,7 @@ Deletion-ready format consumed by `delete_projects.py`:
       "days_since_activity": 121,
       "obsolete_reasons": ["Low activity (last used 121 days ago)"],
       "deletion_status": "review_required",
-      "resource_counts": { /* ... */ }
+      "resource_counts": {}
     }
   ]
 }
@@ -209,8 +209,7 @@ When projects are deleted, they're updated in-place with status and timestamp:
 {
   "project_id": "deleted-project",
   "deletion_status": "deleted",
-  "deleted_at": "2026-01-16T14:30:00",
-  /* ... other fields preserved ... */
+  "deleted_at": "2026-01-16T14:30:00"
 }
 ```
 
