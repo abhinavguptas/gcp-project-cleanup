@@ -16,6 +16,92 @@ Managing hundreds of GCP projects leads to accumulation of abandoned and unatten
 
 This tool automates the discovery of obsolete projects organization-wide, identifies unused resources based on activity timestamps, and provides a safe workflow to batch delete them—helping FinOps teams reduce cloud waste and optimize costs.
 
+## Background
+
+This tool was built to solve a real problem: managing 400+ GCP projects at [Concret.io](https://concret.io), where manual cleanup was impractical and existing solutions required too much infrastructure overhead.
+
+### The Problem at Scale
+
+Sequential scanning of 420 projects took **7+ hours**—each project requiring multiple API calls to check Compute Engine, Cloud Storage, Cloud SQL, App Engine, and other services individually. With projects accumulating faster than they could be reviewed, cloud waste grew unchecked.
+
+### Engineering Decisions
+
+**1. Cloud Asset Inventory API (10-20x faster)**
+
+Instead of querying each GCP service individually (4-8 API calls per project), we use the Cloud Asset Inventory API to retrieve all resources in a single call:
+
+```python
+gcloud asset search-all-resources --scope projects/{project_id}
+```
+
+This alone reduced per-project scan time from ~60 seconds to ~3-5 seconds.
+
+**2. Multi-threaded Parallel Processing**
+
+Using Python's `ThreadPoolExecutor` with configurable workers (default: 10), we analyze multiple projects concurrently:
+
+```python
+with ThreadPoolExecutor(max_workers=self.workers) as executor:
+    future_to_project = {
+        executor.submit(self._analyze_project_worker, project, i): project
+        for i, project in enumerate(projects)
+    }
+    for future in as_completed(future_to_project):  # Process fastest first
+        result = future.result()
+```
+
+Three thread-safe locks coordinate concurrent operations:
+- `_log_lock`: Prevents garbled console output
+- `_progress_lock`: Synchronizes completion counter
+- `_save_lock`: Coordinates file writes
+
+**3. Incremental Persistence (Crash Recovery)**
+
+Both output files are written after every single project analysis—not batched. This enables:
+- **Resume on interrupt**: Re-run picks up where it left off
+- **Real-time progress**: Files always reflect current state
+- **Zero progress loss**: Ctrl+C mid-scan loses only the current project
+
+```python
+def _save_files(self, in_progress: bool = True):
+    with self._save_lock:  # Thread-safe write
+        # Categorize and save both files
+        with open(self.REPORT_FILE, 'w') as f:
+            json.dump(report, f, indent=2, default=str)
+```
+
+**4. Memory-Efficient Storage**
+
+Instead of storing full resource objects, we store only counts:
+
+```python
+# Compact format: ~95% size reduction
+{"instances": 5, "disks": 2, "buckets": 1}
+
+# vs. Full format (avoided)
+{"instances": [{...full resource...}, {...}, ...]}
+```
+
+This keeps memory footprint low even when scanning 400+ projects.
+
+### Performance Results
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Scan time (420 projects) | 7+ hours | < 1 hour |
+| API calls per project | 4-8 | 1 |
+| Memory per project | ~50KB | ~2KB |
+| Resume capability | None | Full |
+
+### Battle-Tested
+
+This tool has been validated on production infrastructure:
+- **Scale**: 420+ GCP projects scanned
+- **Environment**: [Concret.io](https://concret.io) production GCP organization
+- **Results**: 397 projects identified as safe to delete, 20 flagged for review
+
+The multi-threaded chunked-write architecture was critical—early versions without incremental persistence would lose hours of progress on network timeouts or API rate limits.
+
 ## How It Compares
 
 | Feature | This Tool | [Remora](https://cloud.google.com/blog/topics/developers-practitioners/automated-cleanup-unused-google-cloud-projects/) | [SafeScrub](https://github.com/doitintl/SafeScrub) | [ZUNA](https://www.c2cglobal.com/articles/how-to-auto-clean-your-gcp-resources-738) |
