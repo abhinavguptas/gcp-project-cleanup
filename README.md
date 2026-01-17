@@ -18,11 +18,11 @@ This tool automates the discovery of obsolete projects organization-wide, identi
 
 ## Background
 
-This tool was built to solve a real problem: managing 400+ GCP projects at [Concret.io](https://concret.io), where manual cleanup was impractical and existing solutions required too much infrastructure overhead.
+This tool was built to solve a real problem: managing 420+ GCP projects at [Concret.io](https://concret.io), where manual cleanup was impractical and existing solutions required too much infrastructure overhead.
 
 ### The Problem at Scale
 
-Sequential scanning of 420 projects took **7+ hours**—each project requiring multiple API calls to check Compute Engine, Cloud Storage, Cloud SQL, App Engine, and other services individually. With projects accumulating faster than they could be reviewed, cloud waste grew unchecked.
+Sequential scanning of 427 projects took **7+ hours**, each project requiring multiple API calls to check Compute Engine, Cloud Storage, Cloud SQL, App Engine, and other services individually. With projects accumulating faster than they could be reviewed, cloud waste grew unchecked.
 
 ### Engineering Decisions
 
@@ -30,9 +30,41 @@ Sequential scanning of 420 projects took **7+ hours**—each project requiring m
 
 Instead of querying each GCP service individually (4-8 API calls per project), we use the Cloud Asset Inventory API to retrieve all resources in a single call:
 
-```python
-gcloud asset search-all-resources --scope projects/{project_id}
+```bash
+gcloud asset search-all-resources --scope=projects/my-project-id --format=json
 ```
+
+The response is a JSON array containing every resource in the project, regardless of service type:
+
+```json
+[
+  {
+    "name": "//compute.googleapis.com/projects/my-project/zones/us-central1-a/instances/web-server",
+    "assetType": "compute.googleapis.com/Instance",
+    "updateTime": "2025-03-15T10:30:00Z",
+    "createTime": "2024-01-10T08:00:00Z"
+  },
+  {
+    "name": "//storage.googleapis.com/projects/_/buckets/my-backup-bucket",
+    "assetType": "storage.googleapis.com/Bucket",
+    "updateTime": "2024-06-01T14:00:00Z",
+    "createTime": "2023-02-20T09:00:00Z"
+  },
+  {
+    "name": "//sqladmin.googleapis.com/projects/my-project/instances/prod-db",
+    "assetType": "sqladmin.googleapis.com/Instance",
+    "updateTime": "2025-01-10T08:45:00Z",
+    "createTime": "2022-11-15T16:30:00Z"
+  }
+]
+```
+
+Resources are categorized by their `assetType`:
+- **Compute** → `compute.googleapis.com/Instance`, `/Disk`, `/Snapshot`, `/Image`
+- **Storage** → `storage.googleapis.com/Bucket`
+- **Databases** → `sqladmin.googleapis.com/Instance`
+- **Serverless** → `appengine.googleapis.com/Application`, `cloudfunctions.googleapis.com/CloudFunction`
+- **Other** → Everything else the API returns
 
 This alone reduced per-project scan time from ~60 seconds to ~3-5 seconds.
 
@@ -82,13 +114,13 @@ Instead of storing full resource objects, we store only counts:
 {"instances": [{...full resource...}, {...}, ...]}
 ```
 
-This keeps memory footprint low even when scanning 400+ projects.
+This keeps memory footprint low even when scanning hundreds of projects.
 
 ### Performance Results
 
 | Metric | Before | After |
 |--------|--------|-------|
-| Scan time (420 projects) | 7+ hours | < 1 hour |
+| Scan time (420+ projects) | 7+ hours | < 1 hour |
 | API calls per project | 4-8 | 1 |
 | Memory per project | ~50KB | ~2KB |
 | Resume capability | None | Full |
@@ -96,9 +128,12 @@ This keeps memory footprint low even when scanning 400+ projects.
 ### Battle-Tested
 
 This tool has been validated on production infrastructure:
-- **Scale**: 420+ GCP projects scanned
-- **Environment**: [Concret.io](https://concret.io) production GCP organization
-- **Results**: 397 projects identified as safe to delete, 20 flagged for review
+- **Scale**: 427 GCP projects scanned
+- **Environment**: Production GCP organization with 10+ years of cloud sprawl
+- **Results**: 393 zombie projects deleted, 24 flagged for review
+- **Impact**: 34% reduction in monthly GCP spend
+
+📖 **Full story**: [Why I Built My Own GCP Cleanup Tool Instead of Using Google's](https://medium.com/@abhinavguptas/why-i-built-my-own-gcp-cleanup-tool-instead-of-using-googles-a788d9969c59)
 
 The multi-threaded chunked-write architecture was critical—early versions without incremental persistence would lose hours of progress on network timeouts or API rate limits.
 
@@ -128,17 +163,34 @@ The multi-threaded chunked-write architecture was critical—early versions with
 Uses GCP's Cloud Asset Inventory API to scan all resources in a single API call per project, rather than querying each service individually. This is 10-20x faster than checking Compute, Storage, SQL, etc. separately.
 
 ### Parallel Processing
-Analyzes multiple projects concurrently (default: 10 workers). With 420+ projects, sequential processing took 7+ hours; parallel processing reduces this to under 1 hour.
+Analyzes multiple projects concurrently (default: 10 workers). With 427 projects, sequential processing took 7+ hours; parallel processing reduces this to under 1 hour.
 
 > [!NOTE]
-> **Rate Limits:** The Cloud Asset Inventory API has a default quota of 100 requests per 100 seconds per project. With the default 10 workers, you're unlikely to hit this limit. If scanning 500+ projects or using 20+ workers, you may encounter `429 RESOURCE_EXHAUSTED` errors—the script handles these gracefully with automatic retries. To avoid rate limits entirely, use `--workers 5` or `--sequential` mode. See [Cloud Asset API quotas](https://cloud.google.com/asset-inventory/docs/quota) for details.
+> **Rate Limits:** The Cloud Asset Inventory API has a default quota of 100 requests per 100 seconds per project. With the default 10 workers, you're unlikely to hit this limit. If scanning 500+ projects or using 20+ workers, you may encounter `429 RESOURCE_EXHAUSTED` errors—the script will skip affected projects (use `--no-skip-timeout` to fail instead). To avoid rate limits entirely, use `--workers 5` or `--sequential` mode. See [Cloud Asset API quotas](https://cloud.google.com/asset-inventory/docs/quota) for details.
 
 ### Incremental Progress & Auto-Resume
 Both output files are updated after every project. If interrupted, just re-run - the script automatically resumes from where it left off. Use `--fresh` to start over.
 
 ### Two-Tier Classification
+
+For each project, the script finds the most recent `updateTime` across all resources. That becomes the project's "last activity" date:
+
 - **safe_to_delete**: No resources OR no activity for 180+ days
 - **review_required**: Low activity (90-180 days) - flagged for manual review
+
+```python
+# The core classification logic
+def classify_project(project, last_activity_days):
+    if last_activity_days > 180:
+        return "safe_to_delete"
+    elif last_activity_days > 90:
+        return "review_required"
+    return "keep"
+```
+
+Additional obsolescence triggers:
+- **No resources at all** → Obsolete (empty project)
+- **Project state not ACTIVE** → Obsolete (already marked for deletion)
 
 ### Dry-Run by Default
 Deletion script defaults to dry-run mode and requires explicit confirmation (typing "DELETE") before any actual deletion.
@@ -378,6 +430,45 @@ A project is marked **review_required** if:
 - Low activity (90-180 days since last resource update)
 
 Activity is determined by the most recent `updateTime` or `createTime` across all resources returned by the Asset Inventory API.
+
+## Troubleshooting
+
+### Common Errors
+
+**`PERMISSION_DENIED: The caller does not have permission`**
+```
+You need `roles/cloudasset.viewer` at the organization or folder level.
+The basic `roles/viewer` role does NOT include Cloud Asset Inventory permissions.
+```
+
+**`429 RESOURCE_EXHAUSTED: Quota exceeded`**
+```bash
+# Reduce parallel workers
+python3 find_obsolete_projects.py --workers 5
+
+# Or use sequential mode
+python3 find_obsolete_projects.py --sequential
+```
+
+**`Cloud Asset Inventory API has not been enabled`**
+```bash
+# Enable the API (one-time, on any project you have access to)
+gcloud services enable cloudasset.googleapis.com --project=YOUR_PROJECT_ID
+```
+
+**Script seems stuck / no progress**
+```bash
+# Check if incremental progress is being saved
+ls -la obsolete_projects_report.json
+
+# The script saves after every project - if file is updating, it's working
+watch -n 5 'wc -l obsolete_projects_report.json'
+```
+
+**Want to start fresh after a failed run**
+```bash
+python3 find_obsolete_projects.py --fresh
+```
 
 ## Use Cases
 
