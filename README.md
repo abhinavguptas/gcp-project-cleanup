@@ -2,9 +2,7 @@
 
 Automated tool to identify and batch delete obsolete Google Cloud Platform (GCP) projects at scale. A lightweight, zero-dependency Python script for FinOps teams, DevOps engineers, and SREs to eliminate cloud waste and reduce cloud sprawl.
 
-![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)  
-![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)  
-![No Dependencies](https://img.shields.io/badge/dependencies-none-green.svg)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)  ![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)  ![No Dependencies](https://img.shields.io/badge/dependencies-none-green.svg)
 
 ## Why This Exists
 
