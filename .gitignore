@@ -71,10 +71,13 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Project-specific output files
+# Project-specific output files (contain real project IDs, emails, billing account IDs)
 obsolete_projects_report.json
 projects_for_deletion.json
 projects_for_deletion.yaml
+projects_report.json
+api_keys_report.json
+obsolete_projects.md
 
 # Google Cloud credentials and config
 service-account-*.json

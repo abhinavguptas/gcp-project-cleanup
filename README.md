@@ -234,6 +234,53 @@ python3 delete_projects.py
 python3 delete_projects.py --execute
 ```
 
+## Decision-grade scan (v2, recommended)
+
+`find_obsolete_projects.py` decides obsolescence from a single proxy: the newest
+resource `create/update` timestamp. That is a metadata signal, not usage, and it cannot
+tell "empty" from "couldn't read it". **`scan_projects.py`** replaces it with a
+multi-signal engine and a self-describing report consumed by `delete_projects.py`.
+
+```bash
+# 1. Authenticate (no service-account keys needed)
+gcloud auth login
+
+# 2. Scan all accessible projects (long-running; persists + resumes per project)
+python3 scan_projects.py                 # re-run to resume / back-fill failed signals
+python3 scan_projects.py --fresh         # ignore prior report, rescan all
+python3 scan_projects.py --only usage    # re-collect just one signal everywhere
+
+# 3. Review projects_report.json (one record per project, see schema below)
+
+# 4. Delete only what is recommended 'delete', with a LIVE API-key guard (dry-run first)
+python3 delete_projects.py               # dry run
+python3 delete_projects.py --execute     # type DELETE to confirm
+```
+
+**Signals collected per project** (each carries its own `status`, so unknown is never
+silently treated as zero):
+
+| Signal | Source | Answers |
+|---|---|---|
+| `usage` | Monitoring `serviceruntime…/api/request_count` (`consumed_api`) | real API traffic |
+| `activity` | Cloud Logging Admin Activity (serviceusage noise excluded) | is anyone touching it |
+| `resources` | Asset Inventory (+ `coverage_complete` flag) | what's in it / is it really empty |
+| `credentials.api_keys` | api-keys list + per-key `resource.labels.credential_id="apikey:<uid>"` | which keys, used how much |
+| `credentials.service_accounts` | iam service-accounts | hidden identities (pre-stages key recycling) |
+| `billing` | `billing projects describe` | billing-enabled flag (cost context, **not** a keep reason) |
+| `access` | `projects describe` | can we read/act on it |
+
+**Recommendations:** `keep` (real use evidence), `review` (ambiguous or unreadable
+signals), `recycle_keys` (deletable but has idle keys), `delete` (empty, or stale with
+confirmed-zero usage, no keys). Nothing is recommended `delete` on an `unknown` signal,
+and `delete_projects.py` re-checks API keys **live** before each deletion: a key with
+traffic hard-blocks deletion (even with `--allow-keyed`).
+
+> [!NOTE]
+> Per-project **dollar cost is intentionally omitted**: GCP exposes no API/CLI for
+> incurred cost (BigQuery billing export only). `usage` requires `monitoring.googleapis.com`
+> enabled on each project; where it isn't, usage is reported `denied`/`disabled`, not `0`.
+
 ## Usage
 
 ### Finding Obsolete Projects
@@ -437,10 +484,12 @@ The tool uses the following `gcloud` commands, each requiring specific IAM permi
 ## Files
 
 
-| File                        | Purpose                                       |
-| --------------------------- | --------------------------------------------- |
-| `find_obsolete_projects.py` | Scans projects and identifies obsolete ones   |
-| `delete_projects.py`        | Deletes projects from the generated JSON file |
+| File                        | Purpose                                                          |
+| --------------------------- | --------------------------------------------------------------- |
+| `scan_projects.py`          | **v2** multi-signal scanner -> `projects_report.json`            |
+| `gcp.py`                    | **v2** shared gcloud/REST helpers (explicit ok/denied outcomes)  |
+| `delete_projects.py`        | Deletes `delete`-recommended projects, with a live API-key guard |
+| `find_obsolete_projects.py` | v1 (legacy) single-signal scanner; superseded by `scan_projects.py` |
 
 
 ## Obsolescence Criteria
