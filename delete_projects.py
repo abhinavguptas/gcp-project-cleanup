@@ -38,7 +38,6 @@ from typing import Any, Dict, List, Tuple
 
 import gcp
 
-REPORT_FILE = Path(__file__).parent / "projects_report.json"
 DEFAULT_WINDOW_DAYS = 90
 
 
@@ -88,24 +87,35 @@ def live_key_guard(pid: str, window_days: int, allow_keyed: bool) -> Tuple[bool,
 
 class Deleter:
     def __init__(self, report_file: Path, execute: bool, include_recycle: bool,
-                 allow_keyed: bool, window_days: int):
+                 allow_keyed: bool, window_days: int, assume_yes: bool = False):
         self.report_file = report_file
         self.execute = execute
         self.include_recycle = include_recycle
         self.allow_keyed = allow_keyed
         self.window_days = window_days
+        self.assume_yes = assume_yes  # skip interactive prompt (skill/background use)
         self.data: Dict[str, Any] = {}
         self.deleted: List[str] = []
         self.blocked: List[Tuple[str, str]] = []
         self.failed: List[Tuple[str, str]] = []
 
-    def load(self) -> List[Dict[str, Any]]:
+    def load(self, only_ids: List[str] = None) -> List[Dict[str, Any]]:
         if not self.report_file.exists():
             log(f"Report not found: {self.report_file}. Run scan_projects.py first.", "ERROR")
             sys.exit(1)
         self.data = json.loads(self.report_file.read_text())
+        projects = self.data.get("projects", [])
+        if only_ids:  # explicit worklist (e.g. from triage) overrides recommendations
+            by_id = {p.get("project_id"): p for p in projects}
+            candidates = []
+            for pid in only_ids:
+                p = by_id.get(pid, {"project_id": pid, "decision": {"recommendation": "(manual)"}})
+                if p.get("deletion_status") != "deleted":
+                    candidates.append(p)
+            log(f"explicit worklist: {len(candidates)} project(s)")
+            return candidates
         wanted = {"delete"} | ({"recycle_keys"} if self.include_recycle else set())
-        candidates = [p for p in self.data.get("projects", [])
+        candidates = [p for p in projects
                       if p.get("decision", {}).get("recommendation") in wanted
                       and p.get("deletion_status") != "deleted"]
         log(f"Report: {self.data.get('schema_version')} | candidates ({'/'.join(sorted(wanted))}): {len(candidates)}")
@@ -135,7 +145,7 @@ class Deleter:
             return
 
         # Confirm once, up front, before any irreversible action.
-        if self.execute:
+        if self.execute and not self.assume_yes:
             log(f"About to delete up to {len(candidates)} project(s) after live key checks.", "WARN")
             if input("Type 'DELETE' to confirm: ") != "DELETE":
                 log("Cancelled.")
@@ -177,18 +187,32 @@ class Deleter:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Delete GCP projects from projects_report.json")
-    ap.add_argument("--file", type=Path, default=REPORT_FILE)
+    ap = argparse.ArgumentParser(description="Delete GCP projects from a scan report")
+    ap.add_argument("--file", type=Path, default=None,
+                    help="report path (default: projects_report.<account>.json)")
+    ap.add_argument("--account", help="target account (default: active gcloud account)")
+    ap.add_argument("--quota-project",
+                    help="project this account owns, for API quota (needed with a non-active --account)")
+    ap.add_argument("--projects",
+                    help="comma-separated project IDs to delete (overrides report recommendations)")
     ap.add_argument("--execute", action="store_true", help="actually delete (default: dry run)")
     ap.add_argument("--include-recycle", action="store_true",
                     help="also process 'recycle_keys' projects")
     ap.add_argument("--allow-keyed", action="store_true",
                     help="permit deletion of projects with idle keys (never overrides live traffic)")
     ap.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
+    ap.add_argument("--yes", action="store_true",
+                    help="skip the interactive DELETE prompt (for skill/background use)")
     args = ap.parse_args()
 
-    deleter = Deleter(args.file, args.execute, args.include_recycle, args.allow_keyed, args.window_days)
-    deleter.process(deleter.load())
+    if args.account:
+        gcp.set_account(args.account, args.quota_project)
+    report_file = gcp.report_path(str(args.file) if args.file else None, args.account)
+    only_ids = [p.strip() for p in args.projects.split(",") if p.strip()] if args.projects else None
+
+    deleter = Deleter(report_file, args.execute, args.include_recycle, args.allow_keyed,
+                      args.window_days, assume_yes=args.yes)
+    deleter.process(deleter.load(only_ids))
 
 
 if __name__ == "__main__":

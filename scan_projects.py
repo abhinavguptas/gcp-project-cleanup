@@ -38,7 +38,6 @@ from typing import Any, Dict, List, Optional
 import gcp
 
 SCHEMA_VERSION = "2.0"
-REPORT_FILE = Path(__file__).parent / "projects_report.json"
 
 DEFAULT_USAGE_WINDOW_DAYS = 90   # Monitoring keeps 6 wks full-res, then downsamples (still queryable)
 DEFAULT_AUDIT_WINDOW_DAYS = 400  # Admin Activity audit logs default retention
@@ -372,24 +371,26 @@ def decide(rec: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 class Scanner:
-    def __init__(self, workers: int, usage_window: int, audit_window: int, only: Optional[str]):
+    def __init__(self, workers: int, usage_window: int, audit_window: int,
+                 only: Optional[str], report_file: Path):
         self.workers = workers
         self.usage_window = usage_window
         self.audit_window = audit_window
         self.only = only
+        self.report_file = report_file
         self.start = iso_z(now_utc() - timedelta(days=usage_window))
         self.end = iso_z(now_utc())
         self.records: Dict[str, Dict[str, Any]] = {}
         self.account_open: Dict[str, bool] = {}
-        self.account = _active_account()  # resolved once, not on every save
+        self.account = gcp.current_account()  # resolved once, not on every save
         self._save_lock = threading.Lock()
         self._scan_started = iso_z(now_utc())
 
     # ---- persistence -------------------------------------------------------
     def load(self) -> None:
-        if REPORT_FILE.exists():
+        if self.report_file.exists():
             try:
-                data = json.loads(REPORT_FILE.read_text())
+                data = json.loads(self.report_file.read_text())
                 for r in data.get("projects", []):
                     self.records[r["project_id"]] = r
                 log(f"Loaded {len(self.records)} existing project records (resume).")
@@ -448,9 +449,9 @@ class Scanner:
                             "total": len(projects)},
                 "projects": projects,
             }
-            tmp = REPORT_FILE.with_suffix(".json.tmp")
+            tmp = self.report_file.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(report, indent=2, default=str))
-            tmp.replace(REPORT_FILE)
+            tmp.replace(self.report_file)
 
     # ---- per-project work --------------------------------------------------
     def is_complete(self, pid: str) -> bool:
@@ -540,7 +541,7 @@ class Scanner:
                 self.account_open[a.get("name")] = bool(a.get("open", False))
 
     def _print_summary(self) -> None:
-        report = json.loads(REPORT_FILE.read_text())
+        report = json.loads(self.report_file.read_text())
         s = report["summary"]
         log("=" * 64)
         log(f"Scanned: {s['total']}  |  data gaps: {s['data_gaps']}")
@@ -548,12 +549,7 @@ class Scanner:
         log(f"  recycle_keys : {s['by_recommendation']['recycle_keys']}")
         log(f"  review       : {s['by_recommendation']['review']}")
         log(f"  keep         : {s['by_recommendation']['keep']}")
-        log(f"Report: {REPORT_FILE}")
-
-
-def _active_account() -> str:
-    r = gcp.run(["config", "get-value", "account"], parse_json=False, timeout=10)
-    return (r["data"] or "").strip() if r["outcome"] == gcp.OK else ""
+        log(f"Report: {self.report_file}")
 
 
 def get_all_projects() -> List[Dict[str, Any]]:
@@ -582,10 +578,20 @@ def main() -> None:
     ap.add_argument("--only", choices=["access", "billing", "usage", "activity",
                                        "resources", "credentials"],
                     help="re-collect just one signal for every project")
+    ap.add_argument("--account", help="target a credentialed account (default: active gcloud account)")
+    ap.add_argument("--quota-project",
+                    help="project this account owns, for API quota (needed when --account is "
+                         "not the active account; else resource scans get denied)")
+    ap.add_argument("--report", help="report file path (default: projects_report.<account>.json)")
     ap.add_argument("--fresh", action="store_true", help="ignore existing report, rescan all")
     args = ap.parse_args()
 
-    scanner = Scanner(args.workers, args.window_days, args.audit_days, args.only)
+    if args.account:
+        gcp.set_account(args.account, args.quota_project)
+    report_file = gcp.report_path(args.report, args.account)
+    log(f"account: {gcp.current_account() or '(none)'} | report: {report_file.name}")
+
+    scanner = Scanner(args.workers, args.window_days, args.audit_days, args.only, report_file)
     if not args.fresh:
         scanner.load()
 
@@ -593,7 +599,7 @@ def main() -> None:
     if args.limit:
         projects = projects[:args.limit]
     if not projects:
-        log("No projects found (or not authenticated). Run: gcloud auth login")
+        log("No projects found for this account. Try: gcloud auth login")
         return
 
     scanner.run(projects, fresh=args.fresh)

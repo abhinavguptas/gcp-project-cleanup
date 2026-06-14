@@ -281,6 +281,28 @@ traffic hard-blocks deletion (even with `--allow-keyed`).
 > incurred cost (BigQuery billing export only). `usage` requires `monitoring.googleapis.com`
 > enabled on each project; where it isn't, usage is reported `denied`/`disabled`, not `0`.
 
+### Multiple accounts
+
+Each account/org gets its own report (`projects_report.<account>.json`). `--account`
+targets a credentialed account without changing your active gcloud config.
+
+```bash
+python3 scan_projects.py --account you@org-a.com                       # active account: just works
+python3 scan_projects.py --account you@org-b.com --quota-project proj  # non-active account
+```
+
+`--quota-project` is needed only when the target is **not** your active account: Cloud
+Asset attributes quota to a project the account must be able to use, and the active
+project belongs to another org. Pass any project that account owns.
+
+### Conversational pipeline (skills)
+
+For routine use, three `.claude/skills/` wrap the scripts so you don't touch Python:
+
+- `/gcp-scan` — pick an account, ensure APIs, scan, summarize.
+- `/gcp-triage` — deep-dive candidates and build a delete worklist.
+- `/gcp-purge` — background-delete the worklist (live key-guard, one confirmation).
+
 ## Usage
 
 ### Finding Obsolete Projects

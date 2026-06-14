@@ -24,9 +24,12 @@ code lost and that made permission-denied projects look empty (and deletable).
 """
 
 import json
+import os
+import re
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Call outcomes. `ok` means the command ran and returned data (which may legitimately
@@ -40,15 +43,69 @@ ERROR = "error"
 _token_lock = threading.Lock()
 _token_cache: Dict[str, float] = {"value": "", "fetched_at": 0.0}
 
+# Optional account override. When set, every gcloud call and token fetch targets this
+# account (and a quota project it owns) via per-subprocess env vars, WITHOUT mutating the
+# user's active gcloud config. The quota project matters: serviceusage-gated APIs (e.g.
+# Cloud Asset) attribute quota to core/project, so a cross-org active project => denied.
+_account_override: Optional[str] = None
+_quota_project: Optional[str] = None
+
+
+def _env() -> Dict[str, str]:
+    e = dict(os.environ)
+    if _account_override:
+        e["CLOUDSDK_CORE_ACCOUNT"] = _account_override
+        if _quota_project:
+            e["CLOUDSDK_CORE_PROJECT"] = _quota_project
+    return e
+
+
+def set_account(email: Optional[str], quota_project: Optional[str] = None) -> None:
+    """Target a credentialed account for all subsequent calls (no config change).
+
+    serviceusage-gated APIs (e.g. Cloud Asset) attribute quota to core/project. When
+    targeting a NON-active account, the active config project belongs to another org and
+    the account can't use it -> pass `quota_project` (a project this account owns). When
+    targeting the active account, the coherent active project is used automatically.
+    """
+    global _account_override, _quota_project
+    _account_override = email or None
+    _quota_project = quota_project or None
+    with _token_lock:  # force token refresh for the new account
+        _token_cache["value"] = ""
+        _token_cache["fetched_at"] = 0.0
+
+
+def current_account() -> str:
+    """The account in effect: the override if set, else gcloud's active account."""
+    if _account_override:
+        return _account_override
+    r = run(["config", "get-value", "account"], parse_json=False, timeout=10)
+    return (r["data"] or "").strip() if r["outcome"] == OK else ""
+
+
+def account_slug(email: Optional[str]) -> str:
+    """Filename-safe slug for an account email, e.g. a@b.cloud -> a-b-cloud."""
+    return re.sub(r"[^a-z0-9]+", "-", (email or "default").lower()).strip("-") or "default"
+
+
+def report_path(override: Optional[str] = None, account: Optional[str] = None) -> Path:
+    """Per-account report path, or `override` verbatim if given."""
+    if override:
+        return Path(override)
+    return Path(__file__).parent / f"projects_report.{account_slug(account or current_account())}.json"
+
 
 def classify_stderr(stderr: str) -> str:
     """Map a gcloud stderr blob to a failure outcome."""
     s = (stderr or "").lower()
-    if "permission" in s or "403" in s or "does not have" in s or "forbidden" in s:
-        return DENIED
+    # Check "API not enabled" FIRST: GCP's disabled-API errors also contain
+    # "does not have permission", which would otherwise mask them as DENIED.
     if "has not been used" in s or "is disabled" in s or "service_disabled" in s \
             or "accessnotconfigured" in s or "enable it by visiting" in s:
         return DISABLED
+    if "permission" in s or "403" in s or "does not have" in s or "forbidden" in s:
+        return DENIED
     return ERROR
 
 
@@ -64,7 +121,7 @@ def run(args: List[str], timeout: int = 30, parse_json: bool = True) -> Dict[str
 
     try:
         proc = subprocess.run(command, capture_output=True, text=True,
-                              check=False, timeout=timeout)
+                              check=False, timeout=timeout, env=_env())
     except subprocess.TimeoutExpired:
         return {"outcome": TIMEOUT, "data": None, "stderr": f"timeout after {timeout}s"}
     except Exception as e:  # transport / spawn failure
@@ -93,7 +150,7 @@ def access_token(max_age: int = 1800) -> Optional[str]:
             return _token_cache["value"]
         try:
             proc = subprocess.run(["gcloud", "auth", "print-access-token"],
-                                  capture_output=True, text=True, timeout=15)
+                                  capture_output=True, text=True, timeout=15, env=_env())
         except Exception:
             return _token_cache["value"] or None
         if proc.returncode == 0 and proc.stdout.strip():
