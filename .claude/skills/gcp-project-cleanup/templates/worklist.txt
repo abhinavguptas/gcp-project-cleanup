@@ -1,0 +1,5 @@
+# worklist.<account-slug>.txt — one project ID per line; blank lines and # comments ignored.
+# Consumed by delete_projects.py --projects (comma-join the non-comment lines).
+# Example:
+my-old-poc-123
+abandoned-sandbox-456

@@ -238,23 +238,24 @@ python3 delete_projects.py --execute
 
 `find_obsolete_projects.py` decides obsolescence from a single proxy: the newest
 resource `create/update` timestamp. That is a metadata signal, not usage, and it cannot
-tell "empty" from "couldn't read it". **`scan_projects.py`** replaces it with a
-multi-signal engine and a self-describing report consumed by `delete_projects.py`.
+tell "empty" from "couldn't read it". The v2 engine replaces it with a multi-signal
+scanner and a self-describing report, packaged as the **`/gcp-project-cleanup` skill**
+(scan → triage → purge from one entry point).
+
+The engine lives at `.claude/skills/gcp-project-cleanup/scripts/`; reports land in
+repo-root `reports/`. Conversational use is the skill; the CLI underneath:
 
 ```bash
-# 1. Authenticate (no service-account keys needed)
-gcloud auth login
+gcloud auth login                                 # no service-account keys needed
+SK=.claude/skills/gcp-project-cleanup/scripts
 
-# 2. Scan all accessible projects (long-running; persists + resumes per project)
-python3 scan_projects.py                 # re-run to resume / back-fill failed signals
-python3 scan_projects.py --fresh         # ignore prior report, rescan all
-python3 scan_projects.py --only usage    # re-collect just one signal everywhere
+python3 $SK/scan_projects.py                       # scan; re-run resumes failed signals
+python3 $SK/scan_projects.py --fresh              # ignore prior report, rescan all
+python3 $SK/scan_projects.py --only usage         # re-collect one signal everywhere
 
-# 3. Review projects_report.json (one record per project, see schema below)
-
-# 4. Delete only what is recommended 'delete', with a LIVE API-key guard (dry-run first)
-python3 delete_projects.py               # dry run
-python3 delete_projects.py --execute     # type DELETE to confirm
+# Delete only what is recommended 'delete', LIVE API-key guard, dry-run first:
+python3 $SK/delete_projects.py                     # dry run
+python3 $SK/delete_projects.py --execute           # type DELETE to confirm
 ```
 
 **Signals collected per project** (each carries its own `status`, so unknown is never
@@ -283,25 +284,30 @@ traffic hard-blocks deletion (even with `--allow-keyed`).
 
 ### Multiple accounts
 
-Each account/org gets its own report (`projects_report.<account>.json`). `--account`
-targets a credentialed account without changing your active gcloud config.
+Each account/org gets its own report (`reports/projects_report.<account>.json`).
+`--account` targets a credentialed account without changing your active gcloud config.
 
 ```bash
-python3 scan_projects.py --account you@org-a.com                       # active account: just works
-python3 scan_projects.py --account you@org-b.com --quota-project proj  # non-active account
+SK=.claude/skills/gcp-project-cleanup/scripts
+python3 $SK/scan_projects.py --account you@org-a.com                       # active account: just works
+python3 $SK/scan_projects.py --account you@org-b.com --quota-project proj  # non-active account
 ```
 
 `--quota-project` is needed only when the target is **not** your active account: Cloud
 Asset attributes quota to a project the account must be able to use, and the active
 project belongs to another org. Pass any project that account owns.
 
-### Conversational pipeline (skills)
+### Conversational pipeline (one skill)
 
-For routine use, three `.claude/skills/` wrap the scripts so you don't touch Python:
+For routine use, the **`/gcp-project-cleanup`** skill wraps the engine so you don't touch
+Python. One entry point routes by intent + state through three phases:
 
-- `/gcp-scan` — pick an account, ensure APIs, scan, summarize.
-- `/gcp-triage` — deep-dive candidates and build a delete worklist.
-- `/gcp-purge` — background-delete the worklist (live key-guard, one confirmation).
+- **scan** — pick an account, ensure APIs, scan, summarize.
+- **triage** — deep-dive candidates and build a delete worklist.
+- **purge** — background-delete the worklist (live key-guard, one confirmation).
+
+The skill is self-contained under `.claude/skills/gcp-project-cleanup/`
+(`scripts/`, `steps/`, `schemas/`, `templates/`); only its `reports/` outputs live at repo root.
 
 ## Usage
 
@@ -506,12 +512,14 @@ The tool uses the following `gcloud` commands, each requiring specific IAM permi
 ## Files
 
 
-| File                        | Purpose                                                          |
-| --------------------------- | --------------------------------------------------------------- |
-| `scan_projects.py`          | **v2** multi-signal scanner -> `projects_report.json`            |
-| `gcp.py`                    | **v2** shared gcloud/REST helpers (explicit ok/denied outcomes)  |
-| `delete_projects.py`        | Deletes `delete`-recommended projects, with a live API-key guard |
-| `find_obsolete_projects.py` | v1 (legacy) single-signal scanner; superseded by `scan_projects.py` |
+| Path | Purpose |
+| --- | --- |
+| `.claude/skills/gcp-project-cleanup/` | **v2** self-contained skill: `SKILL.md` router + `scripts/` (engine) + `steps/` + `schemas/` + `templates/` |
+| `.claude/skills/gcp-project-cleanup/scripts/scan_projects.py` | multi-signal scanner -> `reports/projects_report.<account>.json` |
+| `.claude/skills/gcp-project-cleanup/scripts/delete_projects.py` | deletes `delete`-recommended projects, with a live API-key guard |
+| `.claude/skills/gcp-project-cleanup/scripts/gcp.py` | shared gcloud/REST helpers (explicit ok/denied/disabled outcomes) |
+| `reports/` | per-account reports + delete worklists (gitignored) |
+| `find_obsolete_projects.py` | v1 (legacy) single-signal scanner; superseded by the v2 skill |
 
 
 ## Obsolescence Criteria

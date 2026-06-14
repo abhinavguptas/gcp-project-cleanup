@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gcp-project-cleanup report",
+  "description": "Output of scan_projects.py. One record per project; every signal carries a status so unknown is never treated as zero. Tri-state booleans: true | false | null(unknown).",
+  "type": "object",
+  "required": ["schema_version", "scan", "summary", "projects"],
+  "properties": {
+    "schema_version": { "const": "2.0" },
+    "scan": {
+      "type": "object",
+      "properties": {
+        "started_at": { "type": "string" },
+        "finished_at": { "type": ["string", "null"] },
+        "account": { "type": "string" },
+        "usage_window_days": { "type": "integer" },
+        "audit_window_days": { "type": "integer" },
+        "in_progress": { "type": "boolean" },
+        "signal_coverage": {
+          "type": "object",
+          "description": "Per API: ok | denied | disabled | unknown",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "by_recommendation": {
+          "type": "object",
+          "properties": {
+            "delete": { "type": "integer" },
+            "recycle_keys": { "type": "integer" },
+            "review": { "type": "integer" },
+            "keep": { "type": "integer" }
+          }
+        },
+        "kept_in_use_by": {
+          "type": "object",
+          "properties": {
+            "traffic": { "type": "integer" },
+            "live_keys": { "type": "integer" },
+            "recent_admin": { "type": "integer" }
+          }
+        },
+        "billable_projects": { "type": "integer" },
+        "data_gaps": { "type": "integer" },
+        "total": { "type": "integer" }
+      }
+    },
+    "projects": { "type": "array", "items": { "$ref": "#/$defs/project" } }
+  },
+  "$defs": {
+    "signalStatus": { "enum": ["ok", "denied", "disabled", "timeout", "error", "unknown"] },
+    "triState": { "type": ["boolean", "null"] },
+    "project": {
+      "type": "object",
+      "required": ["project_id", "decision", "signals"],
+      "properties": {
+        "project_id": { "type": "string" },
+        "project_number": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "lifecycle_state": { "type": ["string", "null"] },
+        "parent": { "type": ["object", "null"] },
+        "access": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "parent": { "type": ["object", "null"] },
+            "lifecycle_state": { "type": ["string", "null"] }
+          }
+        },
+        "billing": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "enabled": { "type": ["boolean", "null"] },
+            "account": { "type": ["string", "null"] },
+            "account_open": { "type": ["boolean", "null"] }
+          }
+        },
+        "usage": {
+          "type": "object",
+          "description": "Real consumer API traffic. status:ok + total_requests:0 == confirmed zero.",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "total_requests": { "type": "integer" },
+            "last_request_time": { "type": ["string", "null"] },
+            "by_service": { "type": "object", "additionalProperties": { "type": "integer" } }
+          }
+        },
+        "activity": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "last_admin_action": { "type": ["string", "null"] },
+            "last_principal": { "type": ["string", "null"] }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "total": { "type": "integer" },
+            "coverage_complete": { "type": "boolean" },
+            "newest": { "type": ["string", "null"] },
+            "oldest": { "type": ["string", "null"] },
+            "counts_by_type": { "type": "object", "additionalProperties": { "type": "integer" } }
+          }
+        },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "api_keys": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "uid": { "type": "string" },
+                  "resource": { "type": "string" },
+                  "created": { "type": "string" },
+                  "restrictions": { "type": "object" },
+                  "usage": {
+                    "type": "object",
+                    "properties": {
+                      "status": { "$ref": "#/$defs/signalStatus" },
+                      "calls_in_window": { "type": "integer" },
+                      "last_used": { "type": ["string", "null"] },
+                      "by_service": { "type": "object" }
+                    }
+                  },
+                  "risk": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            },
+            "service_accounts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string" },
+                  "disabled": { "type": "boolean" },
+                  "key_count": { "type": ["integer", "null"] },
+                  "status": { "$ref": "#/$defs/signalStatus" }
+                }
+              }
+            }
+          }
+        },
+        "signals": {
+          "type": "object",
+          "properties": {
+            "has_traffic": { "$ref": "#/$defs/triState" },
+            "has_live_keys": { "$ref": "#/$defs/triState" },
+            "billing_active": { "$ref": "#/$defs/triState" },
+            "recent_admin_activity": { "$ref": "#/$defs/triState" },
+            "metadata_age_days": { "type": ["integer", "null"] }
+          }
+        },
+        "decision": {
+          "type": "object",
+          "required": ["recommendation", "confidence"],
+          "properties": {
+            "recommendation": { "enum": ["keep", "review", "recycle_keys", "delete", "(manual)"] },
+            "confidence": { "enum": ["high", "medium", "low"] },
+            "reasons": { "type": "array", "items": { "type": "string" } },
+            "blockers": { "type": "array", "items": { "type": "string" } },
+            "data_gaps": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "provenance": { "type": "object" },
+        "deletion_status": { "type": "string" },
+        "deleted_at": { "type": "string" }
+      }
+    }
+  }
+}

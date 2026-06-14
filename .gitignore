@@ -75,10 +75,10 @@ dmypy.json
 obsolete_projects_report.json
 projects_for_deletion.json
 projects_for_deletion.yaml
-projects_report.json
-projects_report.*.json
 api_keys_report.json
 obsolete_projects.md
+# v2 per-account reports + delete worklists (contain project IDs / emails)
+/reports/
 
 # Google Cloud credentials and config
 service-account-*.json

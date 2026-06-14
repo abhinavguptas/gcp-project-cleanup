@@ -89,11 +89,23 @@ def account_slug(email: Optional[str]) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (email or "default").lower()).strip("-") or "default"
 
 
+def repo_root() -> Path:
+    """Nearest ancestor of this file containing .git (else the cwd). Runtime outputs go
+    under repo-root reports/ so they never churn the versioned skill folder."""
+    here = Path(__file__).resolve()
+    for d in (here, *here.parents):
+        if (d / ".git").exists():
+            return d
+    return Path.cwd()
+
+
 def report_path(override: Optional[str] = None, account: Optional[str] = None) -> Path:
-    """Per-account report path, or `override` verbatim if given."""
+    """Per-account report path under repo-root reports/, or `override` verbatim."""
     if override:
         return Path(override)
-    return Path(__file__).parent / f"projects_report.{account_slug(account or current_account())}.json"
+    reports = repo_root() / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    return reports / f"projects_report.{account_slug(account or current_account())}.json"
 
 
 def classify_stderr(stderr: str) -> str:
