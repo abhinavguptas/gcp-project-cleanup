@@ -214,25 +214,27 @@ Deletion script defaults to dry-run mode and requires explicit confirmation (typ
 
 ## Quick Start
 
+The tool is packaged as the **`/gcp-project-cleanup`** skill — invoke it and it walks you
+through scan → triage → delete. To drive the engine directly:
+
 ```bash
 # 1. Authenticate
 gcloud auth login
 
-# 2. Enable Asset Inventory API (required, one-time, on any project)
+# 2. Enable Asset Inventory API (one-time, on any project you own)
 gcloud services enable cloudasset.googleapis.com --project=YOUR_PROJECT_ID
 
-# 3. Find obsolete projects
-python3 find_obsolete_projects.py
+# 3. Scan -> review -> delete (engine lives under the skill)
+SK=.claude/skills/gcp-project-cleanup/scripts
+python3 $SK/scan_projects.py             # writes reports/projects_report.<account>.json
+cat reports/projects_report.*.json       # review
 
-# 4. Review the output
-cat projects_for_deletion.json
-
-# 5. Delete (dry-run first)
-python3 delete_projects.py
-
-# 6. Actually delete (requires confirmation)
-python3 delete_projects.py --execute
+python3 $SK/delete_projects.py           # dry-run of recommended deletions (live key-guard)
+python3 $SK/delete_projects.py --execute # type DELETE to confirm
 ```
+
+> The legacy v1 scanner (`find_obsolete_projects.py`) still runs standalone; the v2 engine
+> above supersedes it. See [Decision-grade scan (v2)](#decision-grade-scan-v2-recommended).
 
 ## Decision-grade scan (v2, recommended)
 
@@ -446,21 +448,27 @@ When projects are deleted, they're updated in-place with status and timestamp:
 
 ### Deleting Projects
 
+`delete_projects.py` reads `reports/projects_report.<account>.json` and deletes only
+projects recommended `delete`, re-checking each project's API keys **live** first (a key
+with traffic hard-blocks). `SK=.claude/skills/gcp-project-cleanup/scripts`.
+
 ```bash
-# Dry run (safe, shows what would be deleted)
-python3 delete_projects.py
+# Dry run (safe, shows what would delete / what is blocked)
+python3 $SK/delete_projects.py
 
-# Actually delete (requires typing 'DELETE' to confirm)
-python3 delete_projects.py --execute
+# Actually delete (type 'DELETE' to confirm)
+python3 $SK/delete_projects.py --execute
 
-# Include projects marked for review
-python3 delete_projects.py --execute --include-review
+# Also process 'recycle_keys' candidates
+python3 $SK/delete_projects.py --execute --include-recycle
 
-# Use a different input file
-python3 delete_projects.py --file my_projects.json --execute
+# Explicit worklist + a non-active account
+python3 $SK/delete_projects.py --account you@org.com --quota-project a-project-you-own \
+  --projects proj-a,proj-b --execute --yes
 ```
 
-**Re-run safety:** After successful deletion, projects are marked with `deletion_status: "deleted"` and `deleted_at` timestamp in the JSON file. Re-running the delete script will skip already-deleted projects.
+**Re-run safety:** deleted projects are marked `deletion_status: "deleted"` with a timestamp
+in the report, so re-runs skip them.
 
 ## Requirements
 

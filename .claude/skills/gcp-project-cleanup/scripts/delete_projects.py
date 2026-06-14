@@ -98,6 +98,7 @@ class Deleter:
         self.deleted: List[str] = []
         self.blocked: List[Tuple[str, str]] = []
         self.failed: List[Tuple[str, str]] = []
+        self.skipped: List[Tuple[str, str]] = []
 
     def load(self, only_ids: List[str] = None) -> List[Dict[str, Any]]:
         if not self.report_file.exists():
@@ -155,6 +156,19 @@ class Deleter:
             pid = p["project_id"]
             rec = p.get("decision", {}).get("recommendation")
             log(f"[{i}/{len(candidates)}] {pid} ({rec})")
+            # Skip anything not ACTIVE (e.g. already DELETE_REQUESTED from a prior run, or
+            # a stale worklist entry) so it isn't mis-reported as a key-verification block.
+            st = gcp.run(["projects", "describe", pid, "--format=value(lifecycleState)"],
+                         parse_json=False, timeout=20)
+            state = (st["data"] or "").strip() if st["outcome"] == gcp.OK else None
+            if st["outcome"] != gcp.OK:
+                log(f"  SKIP: not accessible ({st['outcome']}) - already deleted or no access", "WARN")
+                self.skipped.append((pid, st["outcome"]))
+                continue
+            if state and state != "ACTIVE":
+                log(f"  SKIP: lifecycle {state} (already being deleted)")
+                self.skipped.append((pid, state))
+                continue
             blocked, reason = live_key_guard(pid, self.window_days, self.allow_keyed)
             if blocked:
                 log(f"  BLOCKED: {reason}", "WARN")
@@ -179,7 +193,9 @@ class Deleter:
     def _summary(self) -> None:
         log("=" * 64)
         log(f"{'deleted' if self.execute else 'would delete'}: {len(self.deleted)}  "
-            f"blocked: {len(self.blocked)}  failed: {len(self.failed)}")
+            f"blocked: {len(self.blocked)}  skipped: {len(self.skipped)}  failed: {len(self.failed)}")
+        for pid, reason in self.skipped:
+            log(f"  skipped {pid}: {reason}")
         for pid, reason in self.blocked:
             log(f"  blocked {pid}: {reason}")
         for pid, reason in self.failed:
