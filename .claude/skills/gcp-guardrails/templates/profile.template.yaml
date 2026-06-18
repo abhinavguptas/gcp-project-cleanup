@@ -1,0 +1,22 @@
+# Per-project profile — durable desired state. Conforms to ../schemas/profile.schema.json.
+# Saved to ../profiles/<project>.yaml after the first audit. Re-audits diff live config
+# against this and ask only about drift. Fill the placeholders during the interview.
+
+project: PROJECT_ID
+tier: poc                # poc | app-dev | app-prod | shared-ai (see ../config/tiers.yaml)
+purpose: "ONE LINE — what this project is for"
+
+people:
+  # principal: { goal: "plain words", role: archetype-or-concrete-role }
+  user:someone@concret.io:
+    goal: "builds & deploys the service"
+    role: developer
+  user:analyst@concret.io:
+    goal: "reads dashboards only"
+    role: bigquery.dataViewer
+
+exceptions:
+  # - item: "user:admin@concret.io holds roles/owner"
+  #   reason: "project owner, intentional"
+
+last_audited: ""

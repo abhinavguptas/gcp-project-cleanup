@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gcp-api-cost-guard report",
+  "description": "Output of scan_keys.py. One record per project with its API keys (each classified + measured), budget state, and findings. Key records use the gcp-py canonical shape.",
+  "type": "object",
+  "required": ["schema_version", "scan", "summary", "projects"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "scan": {
+      "type": "object",
+      "properties": {
+        "account": { "type": "string" },
+        "scope": { "enum": ["account-wide", "single"] },
+        "usage_window_days": { "type": "integer" },
+        "generated_at": { "type": "string" },
+        "cost_note": { "type": "string" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "projects": { "type": "integer" },
+        "api_keys": { "type": "integer" },
+        "urgent_findings": { "type": "integer" },
+        "unrestricted_keys": { "type": "integer" },
+        "billable_no_budget": { "type": "integer" }
+      }
+    },
+    "projects": { "type": "array", "items": { "$ref": "#/$defs/project" } }
+  },
+  "$defs": {
+    "signalStatus": { "enum": ["ok", "denied", "disabled", "timeout", "error", "unknown"] },
+    "project": {
+      "type": "object",
+      "required": ["project_id", "api_keys", "findings"],
+      "properties": {
+        "project_id": { "type": "string" },
+        "billing_enabled": { "type": ["boolean", "null"] },
+        "billing_account": { "type": ["string", "null"] },
+        "has_budget": { "type": "boolean" },
+        "has_project_budget": { "type": "boolean" },
+        "budgets": { "type": "array", "items": { "type": "object" } },
+        "budget_status": { "$ref": "#/$defs/signalStatus" },
+        "gemini_enabled": { "type": ["boolean", "null"] },
+        "keys_status": { "$ref": "#/$defs/signalStatus" },
+        "api_keys": { "type": "array", "items": { "$ref": "#/$defs/keyRecord" } },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+      }
+    },
+    "keyRecord": {
+      "type": "object",
+      "description": "Canonical gcp-py key record (keys.make_key_record).",
+      "properties": {
+        "name": { "type": "string" },
+        "uid": { "type": "string" },
+        "resource": { "type": "string" },
+        "created": { "type": "string" },
+        "restrictions": { "type": "object" },
+        "api_restricted": { "type": "boolean" },
+        "app_restricted": { "type": "boolean" },
+        "deadline_status": { "enum": ["breaks_2026_06_19", "restricted_until_2026_09"] },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/$defs/signalStatus" },
+            "calls_in_window": { "type": "integer" },
+            "last_used": { "type": ["string", "null"] },
+            "by_service": { "type": "object" }
+          }
+        },
+        "risk": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["severity", "kind", "detail"],
+      "properties": {
+        "severity": { "enum": ["urgent", "high", "medium", "low", "info"] },
+        "kind": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

@@ -36,7 +36,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+# Import the shared gcp-py library (sibling skill under .claude/skills/) - see gcp-py/SKILL.md.
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gcp-py", "scripts"))
 import gcp
+import keys
 
 DEFAULT_WINDOW_DAYS = 90
 
@@ -51,29 +55,26 @@ def _iso(dt: datetime) -> str:
 
 def live_key_guard(pid: str, window_days: int, allow_keyed: bool) -> Tuple[bool, str]:
     """Re-check API keys live. Returns (blocked, reason)."""
-    r = gcp.run(["services", "api-keys", "list", f"--project={pid}", "--format=json"], timeout=30)
-    if r["outcome"] != gcp.OK:
-        return True, f"cannot verify API keys ({r['outcome']})"
-    keys = r["data"] or []
-    if not keys:
+    kr = keys.list_keys(pid)
+    if kr["status"] != gcp.OK:  # disabled/denied/error all mean we cannot prove safety
+        return True, f"cannot verify API keys ({kr['status']})"
+    klist = kr["keys"]
+    if not klist:
         return False, "no API keys"
 
     token = gcp.access_token()
     start, end = _iso(datetime.now(timezone.utc) - timedelta(days=window_days)), _iso(datetime.now(timezone.utc))
     live, unverifiable = [], 0
-    for k in keys:
+    for k in klist:
         uid = k.get("uid", "")
         name = k.get("displayName", uid)
         if not uid:
             unverifiable += 1
             continue
-        f = ('metric.type="serviceruntime.googleapis.com/api/request_count"'
-             ' AND resource.type="consumed_api"'
-             f' AND resource.labels.credential_id="apikey:{uid}"')
-        m = gcp.monitoring_sum(pid, f, start, end, token)
-        if m["status"] == "ok" and m["total"] > 0:
-            live.append(f"{name}={m['total']}")
-        elif m["status"] != "ok":
+        u = keys.key_usage(pid, uid, token, start, end)
+        if u["status"] == "ok" and u["calls_in_window"] > 0:
+            live.append(f"{name}={u['calls_in_window']}")
+        elif u["status"] != "ok":
             unverifiable += 1
 
     if live:  # hard block - cannot be overridden
@@ -81,8 +82,8 @@ def live_key_guard(pid: str, window_days: int, allow_keyed: bool) -> Tuple[bool,
     if unverifiable and not allow_keyed:
         return True, f"{unverifiable} key(s) with unverifiable usage (use --allow-keyed)"
     if not allow_keyed:
-        return True, f"{len(keys)} idle API key(s) present - recycle first or --allow-keyed"
-    return False, f"{len(keys)} idle key(s), allowed by --allow-keyed"
+        return True, f"{len(klist)} idle API key(s) present - recycle first or --allow-keyed"
+    return False, f"{len(klist)} idle key(s), allowed by --allow-keyed"
 
 
 class Deleter:

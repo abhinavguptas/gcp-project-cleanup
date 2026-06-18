@@ -1,0 +1,352 @@
+# GCP IAM Baseline: Full Stack + AI Projects
+# Version: 1.0  |  2026-06-18
+#
+# Covers ~90% of Full Stack + AI project needs on GCP:
+#   Cloud Run, Firestore, Cloud Storage, Artifact Registry,
+#   Secret Manager, Vertex AI, Firebase Auth, Cloud Build,
+#   Cloud Functions, Pub/Sub, Cloud Tasks, Cloud Scheduler
+#
+# ─────────────────────────────────────────────────────────────────
+# HOW TO USE
+# ─────────────────────────────────────────────────────────────────
+# 1. Copy this file into your project repo under docs/iam/<project>.yaml
+# 2. Fill in every {{ placeholder }} in the config section
+# 3. Review org_policies.restricted_services — uncomment to unblock
+#    any service your project legitimately needs (e.g. Cloud SQL)
+# 4. Set budget.amount_usd to your expected monthly ceiling
+# 5. Apply with: gcloud-iam-apply.sh <project-id>  (see docs/iam/README.md)
+#
+# Environments: use one file per environment (uat, prod).
+# For prod, additionally set cloud_run_deploy_requires_cicd: true
+# so developers lose run.services.update and only CI/CD can deploy.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIG  (fill these in per project)
+# ─────────────────────────────────────────────────────────────────
+
+config:
+  project_id:      "{{ project_id }}"        # e.g. compass-ai-uat
+  billing_account: "{{ billing_account }}"   # e.g. 012D9B-80FD00-5E5F5B
+  region:          "{{ region }}"            # e.g. us-central1
+  org_domain:      "{{ org_domain }}"        # e.g. concret.io
+  budget_usd:      100                       # monthly ceiling in USD
+  env:             "{{ uat | prod }}"        # affects deploy permissions (see below)
+  firebase_linked: false                     # set true if project uses Firebase; triggers Section 6 in apply
+
+# ─────────────────────────────────────────────────────────────────
+# MEMBERS  (fill in per project)
+# ─────────────────────────────────────────────────────────────────
+
+members:
+  owner:
+    - "{{ owner_email }}"               # full project control
+
+  project_pm:                           # tech lead / PM
+    - "{{ pm_email }}"
+
+  developer:                            # one entry per engineer
+    - "{{ developer_email_1 }}"
+    # - "{{ developer_email_2 }}"
+
+# ─────────────────────────────────────────────────────────────────
+# CAPABILITY MATRIX
+# ─────────────────────────────────────────────────────────────────
+#
+# Capability                              Developer   PM     Owner
+# ─────────────────────────────────────────────────────────────────
+# Deploy revision to Cloud Run (UAT)        YES       YES     YES
+# Deploy revision to Cloud Run (prod)        NO*      YES     YES
+# Create / delete Cloud Run service          NO       YES     YES
+# Deploy Cloud Function                      NO       YES     YES
+# Firestore read / write                    YES       YES     YES
+# GCS object read / write                   YES       YES     YES
+# GCS bucket create / delete                 NO       YES     YES
+# Push / pull Artifact Registry             YES       YES     YES
+# Read secrets at runtime                   YES       YES     YES
+# Create / rotate / delete secrets           NO       YES     YES
+# Trigger Cloud Build                       YES       YES     YES
+# Call Vertex AI models                     YES       YES     YES
+# Publish / subscribe Pub/Sub               YES       YES     YES
+# Manage Pub/Sub topics / subscriptions      NO       YES     YES
+# Create Cloud Tasks / Scheduler jobs        NO       YES     YES
+# Firebase Auth – test flows via app        YES       YES     YES  # IAM-invisible; auth calls go via SDK
+# Firebase Auth – manage users               NO       YES     YES
+# View logs and metrics                     YES       YES     YES
+# View billing                               NO       YES     YES
+# View IAM policies                          NO       YES     YES
+# Modify IAM                                 NO        NO     YES
+# Enable / disable GCP APIs                  NO        NO     YES
+# Create service accounts                    NO        NO     YES
+# Create service account keys               NO†        NO†    NO†
+# Create VM instances                        NO†        NO†   NO†
+# ─────────────────────────────────────────────────────────────────
+# *  In prod, developers do not get run.services.update.
+#    Deployments must go through CI/CD (Cloud Build service account).
+# †  Blocked project-wide by org policy regardless of role.
+
+# ─────────────────────────────────────────────────────────────────
+# ROLES
+# ─────────────────────────────────────────────────────────────────
+
+roles:
+
+  # ── Owner ────────────────────────────────────────────────────
+  owner:
+    gcp_role: roles/owner
+    notes: >
+      Full project control. No custom role needed.
+      Still subject to org policy constraints (no key creation, no VMs).
+
+  # ── Project PM / Tech Lead ───────────────────────────────────
+  project_pm:
+    description: >
+      Approves new infrastructure, manages secrets, views billing and IAM.
+      Cannot modify IAM or enable new APIs.
+    predefined_roles:
+      # Compute / serving
+      - roles/run.developer              # create, deploy, delete Cloud Run services + jobs
+      - roles/cloudfunctions.developer   # create and deploy Cloud Functions
+      # Data
+      - roles/datastore.user             # Firestore read/write (data plane)
+      - roles/storage.objectAdmin        # GCS full object control
+      # DevOps
+      - roles/artifactregistry.writer    # push/pull container images and packages
+      - roles/cloudbuild.builds.editor   # trigger and manage builds
+      # Secrets
+      - roles/secretmanager.admin        # create, rotate, delete secrets
+      # AI
+      - roles/aiplatform.user            # call Vertex AI models and endpoints
+      # Messaging
+      - roles/pubsub.admin               # manage topics, subscriptions, snapshots
+      - roles/cloudtasks.admin           # manage queues and tasks
+      - roles/cloudscheduler.admin       # manage cron jobs
+      # Auth
+      - roles/firebase.developAdmin      # full Firebase dev access + Auth user management
+      # Observability
+      - roles/logging.viewer
+      - roles/monitoring.viewer
+      - roles/cloudtrace.user
+      - roles/errorreporting.viewer
+      # Governance
+      - roles/billing.viewer             # view costs; cannot change billing account
+      - roles/iam.securityReviewer       # read all IAM; cannot modify
+
+  # ── Developer ────────────────────────────────────────────────
+  developer:
+    description: >
+      Day-to-day engineer. Ships code to existing services, reads data,
+      calls AI models, reads secrets at runtime. Cannot create infrastructure
+      or manage any resources that drive ongoing cost.
+    predefined_roles:
+      # Data
+      - roles/datastore.user                # Firestore read/write
+      - roles/storage.objectUser            # GCS object read/write; no bucket ops
+      # DevOps
+      - roles/artifactregistry.writer       # push/pull packages
+      - roles/cloudbuild.builds.editor      # trigger and view builds
+      # Secrets
+      - roles/secretmanager.secretAccessor  # read secret values only
+      # AI
+      - roles/aiplatform.user               # call Vertex AI models
+      # Messaging (data plane only)
+      - roles/pubsub.subscriber             # subscribe and pull messages
+      - roles/pubsub.publisher              # publish messages
+      # Auth
+      - roles/firebase.viewer               # view Firebase config in console (read-only)
+                                            # auth flows are tested via app SDK, not IAM
+      # Observability
+      - roles/logging.viewer
+      - roles/monitoring.viewer
+      - roles/cloudtrace.user
+      - roles/errorreporting.viewer
+    custom_roles:
+      # UAT only: deploy to existing services. Absent in prod (CI/CD deploys instead).
+      - compass.runDeployer                 # run.services.update only; no create/delete
+
+    not_granted:
+      # These are intentionally absent — not a deny policy, just omission.
+      # Documented here so reviewers can verify nothing crept in.
+      - serviceusage.services.enable
+      - run.services.create / delete
+      - cloudfunctions.functions.create / delete
+      - secretmanager.secrets.create / delete
+      - iam.serviceAccounts.create
+      - iam.serviceAccountKeys.create
+      - pubsub.topics.create / delete
+      - cloudtasks.queues.create / delete
+      - billing.accounts.get
+
+# ─────────────────────────────────────────────────────────────────
+# CUSTOM ROLES
+# ─────────────────────────────────────────────────────────────────
+
+custom_roles:
+
+  runDeployer:
+    title: "Run Deployer"
+    description: >
+      Deploy new revisions to existing Cloud Run services.
+      Does not allow creating, deleting, or listing services at IAM level.
+      Apply to developers in UAT; omit entirely in prod.
+    stage: GA
+    permissions:
+      - run.configurations.get
+      - run.configurations.list
+      - run.locations.list
+      - run.operations.get
+      - run.operations.list
+      - run.revisions.get
+      - run.revisions.list
+      - run.routes.get
+      - run.routes.list
+      - run.services.get
+      - run.services.list
+      - run.services.update      # triggers a new revision (the deploy action)
+      # Absent: run.services.create, run.services.delete, run.jobs.*
+
+# ─────────────────────────────────────────────────────────────────
+# OPTIONAL SERVICE BUNDLES
+# ─────────────────────────────────────────────────────────────────
+# Uncomment a bundle when a project needs it.
+# Each bundle adds roles to developer/pm AND removes the service
+# from the restricted_services deny list below.
+
+optional_bundles:
+
+  # cloud_sql:
+  #   use_when: Project uses relational DB (PostgreSQL / MySQL)
+  #   remove_from_restricted: [sqladmin.googleapis.com]
+  #   add_to_pm:
+  #     - roles/cloudsql.editor         # manage instances and databases
+  #   add_to_developer:
+  #     - roles/cloudsql.client          # connect to instances; no schema changes
+
+  # redis_memorystore:
+  #   use_when: Project needs a shared cache or session store
+  #   remove_from_restricted: [redis.googleapis.com]
+  #   add_to_pm:
+  #     - roles/redis.editor
+  #   add_to_developer:
+  #     - roles/redis.viewer             # view config; actual connections are code-level
+
+  # firebase_hosting:
+  #   use_when: Project deploys static frontend via Firebase Hosting
+  #   add_to_pm:
+  #     - roles/firebasehosting.admin
+  #   add_to_developer:
+  #     - roles/firebasehosting.viewer
+
+  # eventarc:
+  #   use_when: Project uses Eventarc triggers to connect services
+  #   add_to_pm:
+  #     - roles/eventarc.admin
+  #   add_to_developer:
+  #     - roles/eventarc.viewer
+
+  # alloydb:
+  #   use_when: Project uses AlloyDB (Postgres-compatible, high-perf)
+  #   remove_from_restricted: [alloydb.googleapis.com]
+  #   add_to_pm:
+  #     - roles/alloydb.admin
+  #   add_to_developer:
+  #     - roles/alloydb.client
+
+# ─────────────────────────────────────────────────────────────────
+# ORG POLICIES  (applied at project level)
+# ─────────────────────────────────────────────────────────────────
+
+org_policies:
+
+  - constraint: constraints/gcp.resourceLocations
+    enforce: true
+    allowed_values:
+      - in:{{ region }}-locations         # e.g. in:us-central1-locations
+    rationale: >
+      Lock all resource creation to one region.
+      Prevents accidental multi-region egress charges.
+
+  - constraint: constraints/iam.disableServiceAccountKeyCreation
+    enforce: true
+    rationale: >
+      JSON key files are a credential leak risk.
+      Workloads must use Workload Identity or attached service accounts.
+
+  - constraint: constraints/compute.skipDefaultNetworkCreation
+    enforce: true
+    rationale: >
+      No auto-created VPC if Compute API is ever enabled.
+      Forces intentional network design.
+
+  - constraint: constraints/iam.allowedPolicyMemberDomains
+    enforce: true
+    allowed_values:
+      - "{{ org_domain }}"
+    rationale: >
+      Only team accounts from your domain can be granted IAM roles.
+      Blocks sharing with personal Gmail accounts.
+
+  - constraint: constraints/serviceusage.restrictedServices
+    enforce: true
+    rationale: >
+      Hard deny for services outside the expected architecture.
+      Cannot be overridden by IAM — even Owner cannot enable these.
+      Uncomment optional_bundles above to selectively unblock.
+    denied_services:
+      - compute.googleapis.com         # no VMs (highest cost risk)
+      - container.googleapis.com       # no GKE clusters
+      - sqladmin.googleapis.com        # no Cloud SQL (unblock via cloud_sql bundle)
+      - redis.googleapis.com           # no Memorystore (unblock via redis bundle)
+      - file.googleapis.com            # no Filestore
+      - bigquery.googleapis.com        # no BigQuery (not in scope for most apps)
+      - dataproc.googleapis.com        # no Dataproc / Spark
+      - composer.googleapis.com        # no Cloud Composer (very expensive)
+      - notebooks.googleapis.com       # no Vertex AI Workbench notebooks
+      - datafusion.googleapis.com      # no Cloud Data Fusion
+      - ml.googleapis.com              # legacy AI Platform (use aiplatform instead)
+
+# ─────────────────────────────────────────────────────────────────
+# BUDGET
+# ─────────────────────────────────────────────────────────────────
+
+budget:
+  billing_account: "{{ billing_account }}"
+  project: "{{ project_id }}"
+  display_name: "AI Cap - {{ project_id }}"   # naming convention: "AI Cap - <project>"
+  amount_usd: "{{ budget_usd }}"
+  alerts:
+    - threshold_percent: 50
+      basis: CURRENT_SPEND
+      notify: ["{{ owner_email }}"]
+    - threshold_percent: 90
+      basis: CURRENT_SPEND
+      notify: ["{{ owner_email }}", "{{ pm_email }}"]
+    - threshold_percent: 100
+      basis: CURRENT_SPEND
+      notify: ["{{ owner_email }}", "{{ pm_email }}"]
+  notes: >
+    Budget alerts are informational only by default.
+    To auto-disable billing at 100% (kills all running services — use with caution),
+    wire the Pub/Sub budget notification topic to a Cloud Function that calls
+    billingAccounts.projects.updateBillingInfo with billingAccountName = "".
+    Recommended for sandbox/UAT only, not production.
+
+# ─────────────────────────────────────────────────────────────────
+# PROD DELTA  (additional restrictions for production environment)
+# ─────────────────────────────────────────────────────────────────
+
+prod_delta:
+  notes: >
+    When env = prod, apply these changes on top of this baseline.
+
+  remove_from_developer:
+    - custom_roles/runDeployer          # developers cannot deploy directly in prod
+    # CI/CD service account (Cloud Build SA) gets run.services.update instead
+
+  add_to_developer:
+    - roles/run.viewer                  # can still read service state and logs
+
+  additional_org_policies:
+    - constraint: constraints/run.allowedIngress
+      enforce: true
+      allowed_values: [is:internal-and-cloud-load-balancing]
+      rationale: Cloud Run services in prod must sit behind a load balancer, not public internet.

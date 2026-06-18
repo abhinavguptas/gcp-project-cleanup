@@ -1,0 +1,72 @@
+# gcp-guardrails tier defaults — the SINGLE tunable source of truth.
+# The interview ALWAYS confirms these values with the user before they land in an
+# apply-script; they are defaults, not silent policy. Edit here to retune org-wide.
+#
+# Decisions locked (see chat ADRs): 4 tiers; one project per app per env; one project
+# per POC; Gemini via Vertex is per-project (decentralized); API keys quarantined to
+# shared-ai only. Budgets lag and are not real caps, so kill-switch is ON everywhere
+# except prod (never auto-kill customers).
+
+poc:
+  purpose: "Throwaway experiment / proof of concept"
+  naming: "poc-<owner>-<slug>"          # one project per POC; clean delete = clean teardown
+  required_labels: [owner, ttl]          # ttl drives the /gcp-scan + /gcp-purge reaper
+  budget:
+    limit_usd: 50
+    thresholds: [0.5, 0.9, 1.0]
+    enforce_kill: true
+  quotas: { gpu: 0 }
+  blocked_apis:
+    - generativelanguage.googleapis.com  # use Vertex; keys only in shared-ai
+    - apikeys.googleapis.com
+  cloud_run: { max_instances: 5, allow_min_instances: false, allow_gpu: false }
+  roles: [developer]
+
+app-dev:
+  purpose: "An app's dev / staging project"
+  naming: "<app>-dev"
+  required_labels: [app, env, owner]
+  budget:
+    limit_usd: 200
+    thresholds: [0.5, 0.9, 1.0]
+    enforce_kill: true                    # safe to auto-stop a dev project
+  quotas: { gpu: 0 }
+  blocked_apis:
+    - generativelanguage.googleapis.com
+    - apikeys.googleapis.com
+  cloud_run: { max_instances: 20, allow_min_instances: false, allow_gpu: false }
+  roles: [developer, viewer]
+
+app-prod:
+  purpose: "An app's customer-facing production project"
+  naming: "<app>-prod"
+  required_labels: [app, env, owner]
+  budget:
+    limit_usd: 1000
+    thresholds: [0.5, 0.9, 1.0]
+    enforce_kill: false                   # NEVER let a budget kill production
+  quotas: { gpu: 0 }
+  blocked_apis:
+    - generativelanguage.googleapis.com
+    - apikeys.googleapis.com
+  cloud_run: { max_instances: 100, allow_min_instances: true, allow_gpu: false }
+  access: { pam_required: true, ci_deploy_only: true }
+  roles: [developer, viewer]
+
+shared-ai:
+  purpose: "The ONE quarantine project for API keys (AI-Studio exception). Near-zero workload, not a team pool. Gemini for real apps goes via Vertex in their own project."
+  naming: "ai-keys-quarantine"
+  budget:
+    limit_usd: 200
+    thresholds: [0.5, 0.9, 1.0]
+    enforce_kill: true                    # cap blast radius of a leaked/abused key
+  quotas: { gpu: 0 }
+  allowed_apis:                           # allowed HERE, blocked everywhere else
+    - generativelanguage.googleapis.com
+    - apikeys.googleapis.com
+    - aiplatform.googleapis.com
+  api_key_rules:
+    creator_role_only: true
+    require_api_restriction: true
+    require_app_restriction: true
+  roles: [ai-user]

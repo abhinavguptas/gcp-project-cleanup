@@ -99,13 +99,15 @@ def repo_root() -> Path:
     return Path.cwd()
 
 
-def report_path(override: Optional[str] = None, account: Optional[str] = None) -> Path:
-    """Per-account report path under repo-root reports/, or `override` verbatim."""
+def report_path(override: Optional[str] = None, account: Optional[str] = None,
+                stem: str = "projects_report") -> Path:
+    """Per-account report path under repo-root reports/, or `override` verbatim. `stem` names
+    the report kind (e.g. "keys_report") so each skill keeps its own file per account."""
     if override:
         return Path(override)
     reports = repo_root() / "reports"
     reports.mkdir(parents=True, exist_ok=True)
-    return reports / f"projects_report.{account_slug(account or current_account())}.json"
+    return reports / f"{stem}.{account_slug(account or current_account())}.json"
 
 
 def classify_stderr(stderr: str) -> str:
@@ -170,6 +172,13 @@ def access_token(max_age: int = 1800) -> Optional[str]:
             _token_cache["fetched_at"] = time.time()
             return _token_cache["value"]
         return _token_cache["value"] or None
+
+
+# Base Cloud Monitoring filter for consumed-API request counts. Use as-is for whole-project
+# usage; append a credential_id clause for per-key usage. One home for the metric identity so
+# a GCP metric rename is a single edit.
+REQUEST_COUNT_FILTER = ('metric.type="serviceruntime.googleapis.com/api/request_count"'
+                        ' AND resource.type="consumed_api"')
 
 
 def monitoring_sum(project_id: str, metric_filter: str, start: str, end: str,

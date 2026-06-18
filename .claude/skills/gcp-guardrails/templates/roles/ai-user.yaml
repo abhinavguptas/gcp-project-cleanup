@@ -1,0 +1,12 @@
+# Role archetype: AI-USER — consumes Gemini via Vertex AI with IAM, NOT API keys.
+# Maps a person whose goal is "uses Gemini / builds on models".
+archetype: ai-user
+description: "Call Vertex AI models under IAM. No API keys, no key creation."
+
+grant_roles:
+  - roles/aiplatform.user          # the governed Gemini path
+  - roles/logging.viewer
+
+deny_intent:
+  - serviceusage.apiKeys.create    # never mint keys
+  - roles/editor

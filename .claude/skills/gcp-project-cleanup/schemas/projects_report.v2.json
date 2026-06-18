@@ -121,6 +121,9 @@
                   "resource": { "type": "string" },
                   "created": { "type": "string" },
                   "restrictions": { "type": "object" },
+                  "api_restricted": { "type": "boolean" },
+                  "app_restricted": { "type": "boolean" },
+                  "deadline_status": { "type": "string", "description": "breaks_2026_06_19 | restricted_until_2026_09" },
                   "usage": {
                     "type": "object",
                     "properties": {

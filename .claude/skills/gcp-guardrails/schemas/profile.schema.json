@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gcp-guardrails project profile",
+  "description": "Durable desired-state for one kept project: tier + per-person intent. Re-audits diff live config against this and ask only about drift.",
+  "type": "object",
+  "required": ["project", "tier", "people"],
+  "additionalProperties": false,
+  "properties": {
+    "project": { "type": "string", "description": "GCP project ID" },
+    "tier": { "enum": ["poc", "app-dev", "app-prod", "shared-ai"] },
+    "purpose": { "type": "string", "description": "One line: what this project is for" },
+    "people": {
+      "type": "object",
+      "description": "Keyed by principal (e.g. user:asha@concret.io, serviceAccount:ci@...)",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["goal", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "goal": { "type": "string", "description": "What this principal does here, in plain words" },
+          "role": { "type": "string", "description": "Least-privilege role archetype or concrete role mapped from the goal" }
+        }
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "description": "Findings intentionally NOT fixed, with reason; re-audits treat these as expected",
+      "items": {
+        "type": "object",
+        "required": ["item", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "item": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "last_audited": { "type": "string", "description": "ISO date of the last audit run" }
+  }
+}

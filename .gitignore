@@ -71,6 +71,10 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# gws generate-skills output (generated artifacts, belong in ~/.claude/skills/ not here)
+/skills/
+/docs/skills.md
+
 # Project-specific output files (contain real project IDs, emails, billing account IDs)
 obsolete_projects_report.json
 projects_for_deletion.json

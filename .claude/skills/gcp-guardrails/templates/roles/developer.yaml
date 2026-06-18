@@ -1,0 +1,18 @@
+# Role archetype: DEVELOPER — builds & deploys, but cannot change money/policy.
+# Maps a person whose goal is "builds & deploys" off of basic Editor/Owner.
+archetype: developer
+description: "Deploy and observe app services; no billing, quota, or org-policy power."
+
+# Predefined roles to grant (least-privilege starting set; trim per actual stack).
+grant_roles:
+  - roles/run.developer            # deploy Cloud Run revisions
+  - roles/logging.viewer
+  - roles/monitoring.viewer
+  - roles/artifactregistry.writer  # push images
+  - roles/cloudbuild.builds.editor
+
+# Explicitly NOT granted (the over-privilege this archetype replaces):
+deny_intent:
+  - roles/owner
+  - roles/editor
+  - billing.* / quota.* / orgpolicy.*   # elevation only via PAM, time-bound

@@ -10,12 +10,12 @@ allowed-tools: Bash, Read, Write, AskUserQuestion
 ## Purpose
 Own the whole GCP project-cleanup flow from one entry point: scan an account for obsolete
 projects, triage candidates with evidence, and delete safely. Routes to the right phase by
-intent and state. Self-contained: the engine, step playbooks, schema, and templates all live
-under this folder.
+intent and state. Step playbooks, schema, and templates live under this folder; the engine
+imports the shared `gcp-py` library (a sibling skill) for GCP transport and key/cost primitives.
 
 ```
 <skill>/
-  scripts/      gcp.py · scan_projects.py · delete_projects.py   (the engine)
+  scripts/      scan_projects.py · delete_projects.py   (the engine; imports ../gcp-py)
   references/   step-01-scan.md · step-02-triage.md · step-03-purge.md
   schemas/      projects_report.v2.json                          (report contract)
   templates/    worklist.txt · digest.md

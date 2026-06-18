@@ -1,0 +1,223 @@
+# IAM Model: Compass AI UAT
+# Project: compass-ai-uat | Region: us-central1
+# Authored: 2026-06-18
+# firebase_linked: true
+#
+# Design principles:
+#   - No role includes serviceusage.services.enable (no ad-hoc API activation)
+#   - No role includes compute.instances.create (no VMs)
+#   - Developers deploy to existing services only (no create/delete)
+#   - Secret management is PM-only; developers get read access only
+#   - Service account key creation is blocked project-wide via org policy
+
+# ─────────────────────────────────────────────────────────────
+# CAPABILITY MATRIX
+# ─────────────────────────────────────────────────────────────
+#
+# Capability                          Developer   PM    Owner
+# ─────────────────────────────────────────────────────────────
+# Deploy revision to Cloud Run          YES       YES    YES
+# Create / delete Cloud Run service      NO       YES    YES
+# Read Firestore data                   YES       YES    YES
+# Write Firestore data                  YES       YES    YES
+# Read / write GCS objects              YES       YES    YES
+# Manage GCS buckets                     NO       YES    YES
+# Push / pull Artifact Registry         YES       YES    YES
+# Read secrets (runtime)                YES       YES    YES
+# Create / rotate / delete secrets       NO       YES    YES
+# Trigger Cloud Build                   YES       YES    YES
+# Call Vertex AI models                 YES       YES    YES
+# Firebase Auth – test flows            YES       YES    YES
+# Firebase Auth – manage users           NO       YES    YES
+# View logs and metrics                 YES       YES    YES
+# View billing / costs                   NO       YES    YES
+# View IAM policies                      NO       YES    YES
+# Modify IAM                             NO        NO    YES
+# Enable / disable GCP APIs             NO        NO    YES
+# Create service accounts               NO        NO    YES
+# Create service account keys           NO        NO    NO*
+# Create VM instances                   NO        NO    NO*
+# ─────────────────────────────────────────────────────────────
+# * Blocked project-wide by org policy regardless of role.
+
+# ─────────────────────────────────────────────────────────────
+# ROLE DEFINITIONS
+# ─────────────────────────────────────────────────────────────
+
+roles:
+
+  owner:
+    assignee: abhinav@concret.io
+    gcp_role: roles/owner
+    notes: >
+      Full project control. No custom role needed.
+      Still subject to org policy constraints (no key creation, no VMs).
+
+  project_pm:
+    assignee: takchitrank@concret.io
+    description: >
+      Tech lead or PM. Approves new Cloud Run services, manages secrets,
+      views billing, and monitors IAM. Cannot modify IAM or enable new APIs.
+    predefined_roles:
+      - roles/run.developer            # create / update / delete Cloud Run services + jobs
+      - roles/datastore.user           # Firestore read/write (data plane only)
+      - roles/storage.objectAdmin      # GCS full object control + limited bucket metadata
+      - roles/artifactregistry.writer  # push/pull packages; no repo management
+      - roles/secretmanager.admin      # create, rotate, delete secrets
+      - roles/aiplatform.user          # call Vertex AI models and endpoints
+      - roles/cloudbuild.builds.editor # trigger and view builds
+      - roles/logging.viewer           # view log entries
+      - roles/monitoring.viewer        # view metrics and dashboards
+      - roles/billing.viewer           # view costs; cannot change billing account
+      - roles/iam.securityReviewer     # read all IAM policies; cannot modify
+      - roles/firebase.developAdmin    # full Firebase dev access incl. Auth user management
+
+    explicitly_denied:
+      - serviceusage.services.enable   # no new API activation
+      - serviceusage.services.disable
+      - resourcemanager.projects.setIamPolicy
+      - iam.serviceAccounts.create
+      - iam.serviceAccounts.delete
+      - iam.serviceAccountKeys.create  # enforced by org policy too
+      - compute.instances.create       # enforced by org policy too
+
+  developer:
+    assignee: amitkumar@concret.io
+    description: >
+      Day-to-day engineer. Can deploy new revisions to existing Cloud Run services
+      but cannot create new services, manage infrastructure, or touch secrets.
+    predefined_roles:
+      - roles/datastore.user                # Firestore read/write
+      - roles/storage.objectUser            # GCS object read/write; no bucket ops
+      - roles/artifactregistry.writer       # push/pull NPM packages
+      - roles/secretmanager.secretAccessor  # read secret values only; no create/rotate/delete
+      - roles/aiplatform.user               # call Vertex AI models
+      - roles/cloudbuild.builds.editor      # trigger and view builds
+      - roles/logging.viewer                # view logs
+      - roles/monitoring.viewer             # view metrics
+      - roles/firebase.viewer               # view Firebase config (read-only)
+    custom_roles:
+      - compass.runDeployer                 # defined below; deploy only, no create/delete
+
+    explicitly_denied:
+      - run.services.create                 # cannot spin up new Cloud Run services
+      - run.services.delete
+      - serviceusage.services.enable
+      - serviceusage.services.disable
+      - secretmanager.secrets.create
+      - secretmanager.secrets.delete
+      - secretmanager.versions.destroy
+      - iam.serviceAccounts.create
+      - iam.serviceAccountKeys.create
+      - resourcemanager.projects.setIamPolicy
+      - billing.accounts.get               # no cost visibility
+      - compute.instances.create
+
+# ─────────────────────────────────────────────────────────────
+# CUSTOM ROLES
+# ─────────────────────────────────────────────────────────────
+
+custom_roles:
+
+  compass.runDeployer:
+    title: "Compass Run Deployer"
+    description: >
+      Deploy new revisions to existing Cloud Run services.
+      Cannot create new services, delete services, or manage jobs.
+    stage: GA
+    permissions:
+      # Read / navigation
+      - run.configurations.get
+      - run.configurations.list
+      - run.locations.list
+      - run.operations.get
+      - run.operations.list
+      - run.revisions.get
+      - run.revisions.list
+      - run.routes.get
+      - run.routes.list
+      - run.services.get
+      - run.services.list
+      # Deploy: update triggers a new revision
+      - run.services.update
+      # Intentionally absent:
+      #   run.services.create   <- would let developer spin up new billable services
+      #   run.services.delete
+      #   run.jobs.create / run.jobs.delete
+
+# ─────────────────────────────────────────────────────────────
+# ORG POLICIES  (apply at project level: compass-ai-uat)
+# ─────────────────────────────────────────────────────────────
+
+org_policies:
+
+  - constraint: constraints/gcp.resourceLocations
+    enforce: true
+    allowed_values:
+      - in:us-central1-locations
+    rationale: >
+      All resources locked to us-central1. Prevents accidental multi-region
+      resource creation which drives up egress and storage costs.
+
+  - constraint: constraints/iam.disableServiceAccountKeyCreation
+    enforce: true
+    rationale: >
+      JSON key files are a credential leak risk. All workloads should use
+      Workload Identity or attached service accounts instead.
+
+  - constraint: constraints/compute.skipDefaultNetworkCreation
+    enforce: true
+    rationale: >
+      Prevents auto-creation of a default VPC if Compute API is ever enabled.
+      Forces intentional network design.
+
+  - constraint: constraints/iam.allowedPolicyMemberDomains
+    enforce: true
+    allowed_values:
+      - concret.io
+    rationale: >
+      Only @concret.io accounts can be granted IAM roles.
+      Blocks accidental sharing with personal Gmail accounts.
+
+  - constraint: constraints/serviceusage.restrictedServices
+    enforce: true
+    denied_services:
+      - compute.googleapis.com        # no VMs (biggest cost risk)
+      - container.googleapis.com      # no GKE clusters
+      - sqladmin.googleapis.com       # no Cloud SQL
+      - redis.googleapis.com          # no Memorystore
+      - file.googleapis.com           # no Filestore
+      - bigquery.googleapis.com       # no BigQuery (expensive at scale, not in scope)
+      - dataproc.googleapis.com       # no Dataproc
+      - composer.googleapis.com       # no Cloud Composer (Airflow - very expensive)
+      - notebooks.googleapis.com      # no Vertex AI Workbench notebooks
+      - datafusion.googleapis.com     # no Cloud Data Fusion
+    rationale: >
+      Hard deny for services outside Compass AI's architecture.
+      This constraint cannot be overridden by IAM permissions — even Owner
+      cannot enable these services on this project.
+
+# ─────────────────────────────────────────────────────────────
+# BUDGET GUARD
+# ─────────────────────────────────────────────────────────────
+
+budget:
+  display_name: "AI Cap - compass-ai-uat"
+  billing_account: 01F151-42B6F9-188096
+  project: compass-ai-uat
+  amount_usd: 200
+  alerts:
+    - threshold_percent: 50
+      basis: CURRENT_SPEND
+      notify: [abhinav@concret.io]
+    - threshold_percent: 90
+      basis: CURRENT_SPEND
+      notify: [abhinav@concret.io]
+    - threshold_percent: 100
+      basis: CURRENT_SPEND
+      notify: [abhinav@concret.io]
+  notes: >
+    At 100% you will be notified. To hard-stop billing automatically,
+    a Cloud Function triggered by the Pub/Sub budget alert can disable
+    billing on the project (nuclear option — kills all running services).
+    Recommended to keep manual for UAT; auto-kill is better suited for prod.

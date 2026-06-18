@@ -33,9 +33,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import os
+import sys
 from typing import Any, Dict, List, Optional
 
+# Import the shared gcp-py library (sibling skill under .claude/skills/) - see gcp-py/SKILL.md.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "gcp-py", "scripts"))
 import gcp
+import keys
+import cost
 
 SCHEMA_VERSION = "2.0"
 
@@ -107,15 +113,15 @@ def collect_access(project: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def collect_billing(pid: str, account_open: Dict[str, bool]) -> Dict[str, Any]:
-    """Billing-enabled flag (no $ - GCP exposes no per-project cost API)."""
-    r = gcp.run(["billing", "projects", "describe", pid], timeout=20)
-    if r["outcome"] != gcp.OK:
-        return {"status": r["outcome"], "enabled": None, "account": None, "account_open": None}
-    d = r["data"] or {}
-    acct = d.get("billingAccountName") or None
+    """Billing-enabled flag (no $ - GCP exposes no per-project cost API). account_open cross-
+    references the pre-loaded billing-accounts map, so it stays here rather than in cost.py."""
+    b = cost.project_billing(pid)
+    if b["status"] != gcp.OK:
+        return {"status": b["status"], "enabled": None, "account": None, "account_open": None}
+    acct = b["billing_account"]
     return {
         "status": "ok",
-        "enabled": bool(d.get("billingEnabled", False)),
+        "enabled": b["billing_enabled"],
         "account": acct,
         "account_open": account_open.get(acct) if acct else None,
     }
@@ -125,9 +131,7 @@ def collect_usage(pid: str, token: str, start: str, end: str) -> Dict[str, Any]:
     """Real consumer API traffic for the whole project."""
     if not token:
         return {"status": "unknown", "total_requests": 0, "last_request_time": None, "by_service": {}}
-    f = ('metric.type="serviceruntime.googleapis.com/api/request_count"'
-         ' AND resource.type="consumed_api"')
-    m = gcp.monitoring_sum(pid, f, start, end, token)
+    m = gcp.monitoring_sum(pid, gcp.REQUEST_COUNT_FILTER, start, end, token)
     return {
         "status": m["status"],
         "total_requests": m["total"],
@@ -190,58 +194,21 @@ def collect_resources(pid: str) -> Dict[str, Any]:
 
 def collect_credentials(pid: str, token: str, start: str, end: str) -> Dict[str, Any]:
     """API keys (each with real usage) + service accounts. Pre-stages key recycling."""
+    kr = keys.list_keys(pid)
     keys_out: List[Dict[str, Any]] = []
-    keys_status = "ok"
-    rk = gcp.run(["services", "api-keys", "list", f"--project={pid}", "--format=json"], timeout=30)
-    if rk["outcome"] != gcp.OK:
-        keys_status = rk["outcome"]
-    else:
-        for k in (rk["data"] or []):
-            uid = k.get("uid", "")
-            restrictions = k.get("restrictions", {})
-            usage = {"status": "unknown", "calls_in_window": 0, "last_used": None, "by_service": {}}
-            if uid and token:
-                # credential_id is a RESOURCE label (verified against live API),
-                # value form "apikey:<uid>". The docs/blog that call it a metric
-                # label are wrong for this metric.
-                f = ('metric.type="serviceruntime.googleapis.com/api/request_count"'
-                     ' AND resource.type="consumed_api"'
-                     f' AND resource.labels.credential_id="apikey:{uid}"')
-                m = gcp.monitoring_sum(pid, f, start, end, token)
-                usage = {"status": m["status"], "calls_in_window": m["total"],
-                         "last_used": m["last_active"], "by_service": m["by_service"]}
-            keys_out.append({
-                "name": k.get("displayName", k.get("name", "")),
-                "uid": uid,
-                "resource": k.get("name", ""),
-                "created": k.get("createTime", ""),
-                "restrictions": restrictions,
-                "usage": usage,
-                "risk": ([] if restrictions else ["unrestricted"]),
-            })
+    if kr["status"] == gcp.OK:
+        for k in kr["keys"]:
+            usage = keys.key_usage(pid, k.get("uid", ""), token, start, end)
+            keys_out.append(keys.make_key_record(k, usage))
 
-    sas_out: List[Dict[str, Any]] = []
-    sas_status = "ok"
-    rs = gcp.run(["iam", "service-accounts", "list", f"--project={pid}", "--format=json"], timeout=30)
-    if rs["outcome"] != gcp.OK:
-        sas_status = rs["outcome"]
-    else:
-        for sa in (rs["data"] or []):
-            email = sa.get("email", "")
-            key_count, kc_status = None, "ok"
-            rkeys = gcp.run(["iam", "service-accounts", "keys", "list",
-                             f"--iam-account={email}", "--managed-by=user",
-                             "--format=json"], timeout=20)
-            if rkeys["outcome"] == gcp.OK:
-                key_count = len(rkeys["data"] or [])
-            else:
-                kc_status = rkeys["outcome"]
-            sas_out.append({"email": email, "disabled": bool(sa.get("disabled", False)),
-                            "key_count": key_count, "status": kc_status})
+    sa = keys.sa_user_keys(pid)
+    sas_out = [{"email": s["email"], "disabled": s["disabled"],
+                "key_count": s["user_key_count"], "status": s["status"]}
+               for s in sa["service_accounts"]]
 
     # Section status is the worse of the two list calls.
     status = "ok"
-    for s in (keys_status, sas_status):
+    for s in (kr["status"], sa["status"]):
         if s != "ok":
             status = s
     return {"status": status, "api_keys": keys_out, "service_accounts": sas_out}
